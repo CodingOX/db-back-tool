@@ -73,11 +73,13 @@ jobs:
           zip -r ${{ env.APP_NAME }}-linux-x86_64.zip ${{ env.APP_NAME }} config.yaml
           rm ${{ env.APP_NAME }}
 
-      - name: Build release (aarch64)
-        uses: cross-rs/cross@v1
+      - name: Install cross
+        uses: taiki-e/install-action@v2
         with:
-          command: build
-          args: --release --target aarch64-unknown-linux-musl
+          tool: cross
+
+      - name: Build release (aarch64)
+        run: cross build --release --target aarch64-unknown-linux-musl
 
       - name: Package aarch64
         run: |
