@@ -230,6 +230,63 @@ pub async fn delete_from_cos(
     Ok(())
 }
 
+pub fn encrypt_yaml_file(source: &PathBuf, destination: &PathBuf, password: &str) -> Result<()> {
+    // Read the source yaml file
+    let toml_content = fs::read_to_string(source).map_err(Error::Io)?;
+
+    // Parse yaml to validate it's valid
+    let _config: AllConfig = serde_yml::from_str(&toml_content).map_err(Error::Yaml)?;
+
+    // Generate a salt and derive a key from the password
+    let salt = generate_salt();
+    let key = generate_key_from_password(password.as_bytes(), &salt)?;
+
+    // Encrypt the data
+    let encrypted_data = encrypt_data(toml_content.as_bytes(), &key)?;
+
+    // Prepare the encrypted package with salt
+    let encrypted_package = EncryptedPackage {
+        salt: salt.to_vec(),
+        ciphertext: encrypted_data,
+    };
+
+    // Serialize and save
+    let serialized = serde_json::to_string(&encrypted_package).map_err(Error::Json)?;
+
+    fs::write(destination, serialized).map_err(Error::Io)?;
+
+    info!(
+        "File encrypted successfully: {} -> {}",
+        source.display(),
+        destination.display()
+    );
+
+    Ok(())
+}
+
+pub fn decrypt_yaml_file(encrypted_file: &PathBuf, password: &str) -> Result<AllConfig> {
+    // Read the encrypted file
+    let encrypted_content = fs::read_to_string(encrypted_file).map_err(Error::Io)?;
+
+    // Parse the encrypted package
+    let encrypted_package: EncryptedPackage =
+        serde_json::from_str(&encrypted_content).map_err(Error::Json)?;
+
+    // Derive the key from the password and salt
+    let key = generate_key_from_password(password.as_bytes(), &encrypted_package.salt)?;
+
+    // Decrypt the data
+    let decrypted_data = decrypt_data(&encrypted_package.ciphertext, &key)?;
+
+    // Parse the decrypted yaml to validate it's valid
+    let decrypted_str = String::from_utf8(decrypted_data)
+        .map_err(|_| Error::Decryption("Decrypted data is not valid UTF-8".to_string()))?;
+
+    let config: AllConfig = serde_yml::from_str(&decrypted_str).map_err(Error::Yaml)?;
+
+    Ok(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{find_remote_item_by_key, select_expired_remote_files, verify_remote_upload_size};
@@ -333,61 +390,4 @@ mod tests {
             matches!(err, crate::Error::Integrity(message) if message.contains("size mismatch"))
         );
     }
-}
-
-pub fn encrypt_yaml_file(source: &PathBuf, destination: &PathBuf, password: &str) -> Result<()> {
-    // Read the source yaml file
-    let toml_content = fs::read_to_string(source).map_err(Error::Io)?;
-
-    // Parse yaml to validate it's valid
-    let _config: AllConfig = serde_yml::from_str(&toml_content).map_err(Error::Yaml)?;
-
-    // Generate a salt and derive a key from the password
-    let salt = generate_salt();
-    let key = generate_key_from_password(password.as_bytes(), &salt)?;
-
-    // Encrypt the data
-    let encrypted_data = encrypt_data(toml_content.as_bytes(), &key)?;
-
-    // Prepare the encrypted package with salt
-    let encrypted_package = EncryptedPackage {
-        salt: salt.to_vec(),
-        ciphertext: encrypted_data,
-    };
-
-    // Serialize and save
-    let serialized = serde_json::to_string(&encrypted_package).map_err(Error::Json)?;
-
-    fs::write(destination, serialized).map_err(Error::Io)?;
-
-    info!(
-        "File encrypted successfully: {} -> {}",
-        source.display(),
-        destination.display()
-    );
-
-    Ok(())
-}
-
-pub fn decrypt_yaml_file(encrypted_file: &PathBuf, password: &str) -> Result<AllConfig> {
-    // Read the encrypted file
-    let encrypted_content = fs::read_to_string(encrypted_file).map_err(Error::Io)?;
-
-    // Parse the encrypted package
-    let encrypted_package: EncryptedPackage =
-        serde_json::from_str(&encrypted_content).map_err(Error::Json)?;
-
-    // Derive the key from the password and salt
-    let key = generate_key_from_password(password.as_bytes(), &encrypted_package.salt)?;
-
-    // Decrypt the data
-    let decrypted_data = decrypt_data(&encrypted_package.ciphertext, &key)?;
-
-    // Parse the decrypted yaml to validate it's valid
-    let decrypted_str = String::from_utf8(decrypted_data)
-        .map_err(|_| Error::Decryption("Decrypted data is not valid UTF-8".to_string()))?;
-
-    let config: AllConfig = serde_yml::from_str(&decrypted_str).map_err(Error::Yaml)?;
-
-    Ok(config)
 }
