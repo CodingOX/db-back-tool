@@ -1,12 +1,10 @@
-use super::Database;
+use super::{Database, stream_dump_to_file};
 use crate::config::MySqlConfig;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use chrono::Utc;
 use serde::Deserialize;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MySql(MySqlConfig);
@@ -41,22 +39,13 @@ impl Database for MySql {
             .arg(database_name)
             .env("MYSQL_PWD", &self.password);
 
-        let output = cmd.output().await?;
-
-        if !output.status.success() {
-            return Err(Error::DatabaseBackup(format!(
-                "mysqldump failed for database {}: {}",
-                database_name,
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-
-        // 确保备份目录存在
-        tokio::fs::create_dir_all(&backup_dir).await?;
-
-        let mut file = File::create(&backup_path).await?;
-        file.write_all(&output.stdout).await?;
-        file.flush().await?;
+        // 直接把 mysqldump 的 stdout 流式写入目标文件，避免大库 dump 时撑爆内存。
+        stream_dump_to_file(
+            &mut cmd,
+            &backup_path,
+            &format!("mysqldump failed for database {database_name}"),
+        )
+        .await?;
 
         Ok(backup_path)
     }
