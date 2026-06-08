@@ -64,13 +64,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build release
+      - name: Build release (x86_64)
         run: cargo build --release
 
-      - name: Package artifacts
+      - name: Package x86_64
         run: |
-          cp target/release/${{ env.APP_NAME }} .
+          cp target/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}
           zip -r ${{ env.APP_NAME }}-linux-x86_64.zip ${{ env.APP_NAME }} config.yaml
+          rm ${{ env.APP_NAME }}
+
+      - name: Build release (aarch64)
+        uses: cross-rs/cross@v1
+        with:
+          command: build
+          args: --release --target aarch64-unknown-linux-musl
+
+      - name: Package aarch64
+        run: |
+          cp target/aarch64-unknown-linux-musl/release/${{ env.APP_NAME }} ${{ env.APP_NAME }}
+          zip -r ${{ env.APP_NAME }}-linux-aarch64.zip ${{ env.APP_NAME }} config.yaml
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
@@ -79,6 +91,8 @@ jobs:
           name: ${{ github.ref_name }}
           draft: false
           prerelease: false
-          files: ${{ env.APP_NAME }}-linux-x86_64.zip
+          files: |
+            ${{ env.APP_NAME }}-linux-x86_64.zip
+            ${{ env.APP_NAME }}-linux-aarch64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
