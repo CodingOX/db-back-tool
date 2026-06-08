@@ -39,10 +39,12 @@ pub fn find_remote_item_by_key<'a>(
 }
 
 async fn ensure_file_non_empty(path: &Path) -> Result<u64> {
-    let metadata = tokio::fs::metadata(path).await.map_err(|e| Error::Io(std::io::Error::new(
-        e.kind(),
-        format!("Failed to stat file '{}': {}", path.display(), e),
-    )))?;
+    let metadata = tokio::fs::metadata(path).await.map_err(|e| {
+        Error::Io(std::io::Error::new(
+            e.kind(),
+            format!("Failed to stat file '{}': {}", path.display(), e),
+        ))
+    })?;
 
     if metadata.len() == 0 {
         return Err(Error::Integrity(format!(
@@ -230,9 +232,7 @@ pub async fn delete_from_cos(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        find_remote_item_by_key, select_expired_remote_files, verify_remote_upload_size,
-    };
+    use super::{find_remote_item_by_key, select_expired_remote_files, verify_remote_upload_size};
     use crate::error::Result;
     use crate::storage::CosItem;
     use crate::storage::Storage;
@@ -329,7 +329,9 @@ mod tests {
         let err = verify_remote_upload_size(&storage, &file_path, "db", 5)
             .await
             .unwrap_err();
-        assert!(matches!(err, crate::Error::Integrity(message) if message.contains("size mismatch")));
+        assert!(
+            matches!(err, crate::Error::Integrity(message) if message.contains("size mismatch"))
+        );
     }
 }
 
