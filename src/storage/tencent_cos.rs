@@ -37,7 +37,12 @@ pub struct TencentCos {
 #[async_trait::async_trait]
 impl Storage for TencentCos {
     async fn upload(&self, file_path: &Path, cos_path: &str) -> Result<()> {
-        let file_name = file_path.file_name().unwrap().to_string_lossy();
+        let file_name = file_path
+            .file_name()
+            .ok_or_else(|| {
+                Error::InvalidConfig(format!("Invalid file path: {}", file_path.display()))
+            })?
+            .to_string_lossy();
         let cos_path_full = format!("{}{}", cos_path, file_name);
         let object_client = ObjectClient::new(self.client.clone());
 
@@ -113,7 +118,7 @@ impl Storage for TencentCos {
 }
 
 impl TencentCos {
-    pub fn new(config: &TencentCosConfig) -> Self {
+    pub fn new(config: &TencentCosConfig) -> Result<Self> {
         // 创建配置
         let config = Config::new(
             &config.secret_id,
@@ -125,7 +130,8 @@ impl TencentCos {
         .with_https(true);
 
         // 创建客户端
-        let client = CosClient::new(config).expect("init cos client failed");
-        TencentCos { client }
+        let client = CosClient::new(config)
+            .map_err(|e| Error::Storage(format!("init cos client failed: {}", e)))?;
+        Ok(TencentCos { client })
     }
 }

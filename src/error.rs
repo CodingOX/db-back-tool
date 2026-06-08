@@ -27,6 +27,9 @@ pub enum Error {
     #[error("Compression error: {0}")]
     Compression(String),
 
+    #[error("Integrity check failed: {0}")]
+    Integrity(String),
+
     #[error("Storage error: {0}")]
     Storage(String),
 

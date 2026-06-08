@@ -19,6 +19,24 @@ pub trait Storage: Send + Sync {
     async fn delete(&self, backup_name: &str) -> Result<()>;
 }
 
+pub(crate) fn build_object_key(file_path: &Path, cos_path: &str) -> Result<(String, String)> {
+    let file_name = file_path
+        .file_name()
+        .ok_or_else(|| {
+            crate::Error::InvalidConfig(format!("Invalid file path: {}", file_path.display()))
+        })?
+        .to_string_lossy()
+        .to_string();
+
+    let object_key = if cos_path.ends_with('/') {
+        format!("{}{}", cos_path, file_name)
+    } else {
+        format!("{}/{}", cos_path, file_name)
+    };
+
+    Ok((file_name, object_key))
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CosItem {
     pub key: String,
@@ -59,5 +77,19 @@ impl Tabled for CosItem {
             last_modified.into(),
             human_size.into(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_object_key;
+    use std::path::Path;
+
+    #[test]
+    fn test_build_object_key_supports_prefix_without_trailing_slash() {
+        let path = Path::new("/tmp/demo.7z");
+        let (file_name, key) = build_object_key(path, "db").unwrap();
+        assert_eq!(file_name, "demo.7z");
+        assert_eq!(key, "db/demo.7z");
     }
 }

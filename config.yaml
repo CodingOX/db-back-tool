@@ -4,6 +4,7 @@ app:
   cos_provider: "tencent_cos"                # 云存储服务提供商: tencent_cos 或 aliyun_oss 或 s3
   cos_path: "db/"                            # 云存储中的备份文件路径前缀
   compress_password: "password"              # 备份压缩包加密密码
+  retention_days: 2                          # 备份保留天数，delete 时本地和远端统一按天清理
         
 tencent_cos:        
   secret_id: "AKIDuhLs"                      # 腾讯云 COS SecretId

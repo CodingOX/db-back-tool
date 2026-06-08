@@ -1,7 +1,7 @@
 use super::CosItem;
 use crate::config::AliyunOssConfig;
 use crate::error::{Error, Result};
-use crate::storage::Storage;
+use crate::storage::{Storage, build_object_key};
 use chrono::{DateTime, Utc};
 use s3::{Bucket, Region, creds::Credentials};
 use serde::{Deserialize, Serialize};
@@ -36,29 +36,18 @@ pub struct AliyunOss {
 #[async_trait::async_trait]
 impl Storage for AliyunOss {
     async fn upload(&self, file_path: &Path, cos_path: &str) -> Result<()> {
-        let file_name = file_path
-            .file_name()
-            .ok_or_else(|| {
-                Error::InvalidConfig(format!("Invalid file path: {}", file_path.display()))
-            })?
-            .to_string_lossy();
+        let (file_name, s3_key) = build_object_key(file_path, cos_path)?;
+        let mut file =
+            tokio::fs::File::open(file_path)
+                .await
+                .map_err(|e| Error::StorageUpload {
+                    path: file_path.to_path_buf(),
+                    message: format!("Failed to open file: {}", e),
+                })?;
 
-        let s3_key = if cos_path.ends_with('/') {
-            format!("{}{}", cos_path, file_name)
-        } else {
-            format!("{}/{}", cos_path, file_name)
-        };
-
-        // 读取文件内容
-        let content = std::fs::read(file_path).map_err(|e| Error::StorageUpload {
-            path: file_path.to_path_buf(),
-            message: format!("Failed to read file: {}", e),
-        })?;
-
-        // 上传到 Aliyun Oss
         let res = self
             .client
-            .put_object(&s3_key, &content)
+            .put_object_stream(&mut file, &s3_key)
             .await
             .map_err(|e| Error::StorageUpload {
                 path: file_path.to_path_buf(),
@@ -66,7 +55,7 @@ impl Storage for AliyunOss {
             })?;
 
         if res.status_code() == 200 {
-            info!("Successfully uploaded: {}", file_name,);
+            info!("Successfully uploaded: {}", file_name);
             Ok(())
         } else {
             Err(Error::StorageUpload {
@@ -138,7 +127,7 @@ impl Storage for AliyunOss {
 }
 
 impl AliyunOss {
-    pub fn new(config: &AliyunOssConfig) -> Self {
+    pub fn new(config: &AliyunOssConfig) -> Result<Self> {
         // 创建区域配置
         let region = Region::Custom {
             region: "".to_string(),
@@ -156,8 +145,8 @@ impl AliyunOss {
 
         // 创建存储桶实例
         let bucket = Bucket::new(&config.bucket, region, credentials)
-            .expect("create aliyun oss bucket failed");
+            .map_err(|e| Error::Storage(format!("create aliyun oss bucket failed: {}", e)))?;
 
-        AliyunOss { client: bucket }
+        Ok(AliyunOss { client: bucket })
     }
 }

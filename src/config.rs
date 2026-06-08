@@ -32,6 +32,7 @@ pub struct AppConfig {
     pub cos_provider: CosProvider,
     pub cos_path: String,
     pub compress_password: String,
+    pub retention_days: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -113,6 +114,7 @@ impl Default for AppConfig {
             cos_provider: CosProvider::TencentCos,
             cos_path: "db/".into(),
             compress_password: "dbbackuppassword".into(),
+            retention_days: None,
         }
     }
 }
@@ -142,29 +144,30 @@ impl AppConfig {
             }
         }
     }
-    pub async fn storage(&self, config: &AllConfig) -> Arc<dyn Storage> {
-        match self.cos_provider {
+    pub async fn storage(&self, config: &AllConfig) -> Result<Arc<dyn Storage>> {
+        let storage = match self.cos_provider {
             CosProvider::TencentCos => {
                 let config = &config.tencent_cos;
-                let storage = TencentCos::new(config);
-                Arc::new(storage) as Arc<dyn Storage>
+                Arc::new(TencentCos::new(config)?) as Arc<dyn Storage>
             }
             CosProvider::AliyunOss => {
                 let config = &config.aliyun_oss;
-                let storage = AliyunOss::new(config);
-                Arc::new(storage) as Arc<dyn Storage>
+                Arc::new(AliyunOss::new(config)?) as Arc<dyn Storage>
             }
             CosProvider::LocalStorage => {
                 let path = &config.app.get_backup_dir();
-                let storage = LocalStorage::new(path.to_str().unwrap()).await;
+                let storage = LocalStorage::new(path.to_str().ok_or_else(|| {
+                    Error::PathResolution("backup_dir is not valid UTF-8".to_string())
+                })?)
+                .await;
                 Arc::new(storage) as Arc<dyn Storage>
             }
             CosProvider::S3 => {
                 let config = &config.s3;
-                let storage = S3Oss::new(config);
-                Arc::new(storage) as Arc<dyn Storage>
+                Arc::new(S3Oss::new(config)?) as Arc<dyn Storage>
             }
-        }
+        };
+        Ok(storage)
     }
 }
 
@@ -188,6 +191,27 @@ pub fn get_all_config(config_path: &str, password: Option<String>) -> Result<All
     Ok(config)
 }
 
+pub fn resolve_password(
+    cli_password: Option<String>,
+    password_file: Option<String>,
+) -> Result<Option<String>> {
+    if let Some(password) = cli_password {
+        return Ok(Some(password));
+    }
+
+    if let Some(path) = password_file {
+        let password = std::fs::read_to_string(&path).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("Failed to read password file '{}': {}", path, e),
+            ))
+        })?;
+        return Ok(Some(password.trim().to_string()));
+    }
+
+    Ok(std::env::var("BACKUPDBTOOL_PASSWORD").ok())
+}
+
 pub fn get_webhook(config: &AllConfig) -> Option<WebHookNotify> {
     config.webhook.as_ref().map(|webhook_config| {
         WebHookNotify::new(webhook_config.url.clone(), webhook_config.token.clone())
@@ -197,6 +221,7 @@ pub fn get_webhook(config: &AllConfig) -> Option<WebHookNotify> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::fs::File as StdFile;
     use std::io::Write;
     use tempfile::tempdir;
@@ -215,6 +240,7 @@ mod tests {
             cos_provider = "tencent_cos"
             cos_path = "db/"
             compress_password = "testpassword"
+            retention_days = 7
 
             [tencent_cos]
             secret_id = "testid"
@@ -261,6 +287,7 @@ mod tests {
         assert_eq!(config.app.cos_provider, CosProvider::TencentCos);
         assert_eq!(config.app.cos_path, "db/");
         assert_eq!(config.app.compress_password, "testpassword");
+        assert_eq!(config.app.retention_days, Some(7));
 
         assert_eq!(config.tencent_cos.secret_id, "testid");
         assert_eq!(config.tencent_cos.secret_key, "testkey");
@@ -280,5 +307,130 @@ mod tests {
         );
         assert_eq!(config.s3.bucket, "bucket-1234567");
         assert_eq!(config.s3.region, Some("ap-shanghai".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_password_prefers_cli_password() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("pwd.txt");
+        std::fs::write(&file_path, "from-file\n").unwrap();
+        unsafe {
+            env::set_var("BACKUPDBTOOL_PASSWORD", "from-env");
+        }
+
+        let resolved = resolve_password(
+            Some("from-cli".to_string()),
+            Some(file_path.to_string_lossy().to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, Some("from-cli".to_string()));
+        unsafe {
+            env::remove_var("BACKUPDBTOOL_PASSWORD");
+        }
+    }
+
+    #[test]
+    fn test_resolve_password_uses_password_file_before_env() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("pwd.txt");
+        std::fs::write(&file_path, "from-file\n").unwrap();
+        unsafe {
+            env::set_var("BACKUPDBTOOL_PASSWORD", "from-env");
+        }
+
+        let resolved =
+            resolve_password(None, Some(file_path.to_string_lossy().to_string())).unwrap();
+
+        assert_eq!(resolved, Some("from-file".to_string()));
+        unsafe {
+            env::remove_var("BACKUPDBTOOL_PASSWORD");
+        }
+    }
+
+    #[test]
+    fn test_resolve_password_falls_back_to_env() {
+        unsafe {
+            env::set_var("BACKUPDBTOOL_PASSWORD", "from-env");
+        }
+
+        let resolved = resolve_password(None, None).unwrap();
+
+        assert_eq!(resolved, Some("from-env".to_string()));
+        unsafe {
+            env::remove_var("BACKUPDBTOOL_PASSWORD");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_storage_returns_error_for_non_utf8_local_backup_dir() {
+        #[cfg(unix)]
+        {
+            use std::ffi::OsString;
+            use std::os::unix::ffi::OsStringExt;
+
+            let config = get_all_config(
+                tempdir()
+                    .unwrap()
+                    .path()
+                    .join("dummy.toml")
+                    .to_string_lossy()
+                    .as_ref(),
+                None,
+            )
+            .err();
+            assert!(config.is_some() || config.is_none());
+
+            let app = AppConfig {
+                backup_dir: PathBuf::from(OsString::from_vec(vec![0x66, 0x6f, 0x80])),
+                db_type: DbType::Postgresql,
+                cos_provider: CosProvider::LocalStorage,
+                cos_path: "db/".to_string(),
+                compress_password: "pwd".to_string(),
+                retention_days: None,
+            };
+
+            let all_config = AllConfig {
+                app: app.clone(),
+                tencent_cos: TencentCosConfig {
+                    secret_id: "id".to_string(),
+                    secret_key: "key".to_string(),
+                    region: "ap-shanghai".to_string(),
+                    bucket: "bucket".to_string(),
+                },
+                postgresql: PostgreSqlConfig {
+                    host: "localhost".to_string(),
+                    port: 5432,
+                    username: "user".to_string(),
+                    password: "pass".to_string(),
+                },
+                mysql: MySqlConfig {
+                    host: "localhost".to_string(),
+                    port: 3306,
+                    username: "user".to_string(),
+                    password: "pass".to_string(),
+                },
+                aliyun_oss: AliyunOssConfig {
+                    secret_id: "id".to_string(),
+                    secret_key: "key".to_string(),
+                    end_point: "oss-cn-shanghai.aliyuncs.com".to_string(),
+                    bucket: "bucket".to_string(),
+                },
+                s3: S3OssConfig {
+                    secret_id: "id".to_string(),
+                    secret_key: "key".to_string(),
+                    end_point: Some("https://example.com".to_string()),
+                    bucket: "bucket".to_string(),
+                    region: None,
+                },
+                webhook: None,
+            };
+
+            let err = match app.storage(&all_config).await {
+                Ok(_) => panic!("expected path resolution error"),
+                Err(err) => err,
+            };
+            assert!(matches!(err, Error::PathResolution(_)));
+        }
     }
 }

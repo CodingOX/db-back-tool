@@ -1,7 +1,7 @@
 use super::CosItem;
 use crate::config::S3OssConfig;
 use crate::error::{Error, Result};
-use crate::storage::Storage;
+use crate::storage::{Storage, build_object_key};
 use chrono::{DateTime, Utc};
 use s3::{Bucket, Region, creds::Credentials};
 use serde::{Deserialize, Serialize};
@@ -37,31 +37,18 @@ pub struct S3Oss {
 #[async_trait::async_trait]
 impl Storage for S3Oss {
     async fn upload(&self, file_path: &Path, cos_path: &str) -> Result<()> {
-        let file_name = file_path
-            .file_name()
-            .ok_or_else(|| {
-                Error::InvalidConfig(format!("Invalid file path: {}", file_path.display()))
-            })?
-            .to_string_lossy();
+        let (file_name, s3_key) = build_object_key(file_path, cos_path)?;
+        let mut file =
+            tokio::fs::File::open(file_path)
+                .await
+                .map_err(|e| Error::StorageUpload {
+                    path: file_path.to_path_buf(),
+                    message: format!("Failed to open file: {}", e),
+                })?;
 
-        let s3_key = if cos_path.ends_with('/') {
-            format!("{}{}", cos_path, file_name)
-        } else {
-            format!("{}/{}", cos_path, file_name)
-        };
-
-        // 读取文件内容
-        let content = tokio::fs::read(file_path)
-            .await
-            .map_err(|e| Error::StorageUpload {
-                path: file_path.to_path_buf(),
-                message: format!("Failed to read file: {}", e),
-            })?;
-
-        // 上传到 S3
         let res = self
             .bucket
-            .put_object(&s3_key, &content)
+            .put_object_stream(&mut file, &s3_key)
             .await
             .map_err(|e| Error::StorageUpload {
                 path: file_path.to_path_buf(),
@@ -144,7 +131,7 @@ impl Storage for S3Oss {
 }
 
 impl S3Oss {
-    pub fn new(config: &S3OssConfig) -> Self {
+    pub fn new(config: &S3OssConfig) -> Result<Self> {
         let region_config = match &config.region {
             Some(region) => region,
             None => "",
@@ -158,7 +145,9 @@ impl S3Oss {
             }
         } else {
             // 对于 AWS S3，使用标准区域
-            region_config.parse().expect("invalid region")
+            region_config.parse().map_err(|e| {
+                Error::InvalidConfig(format!("invalid region '{}': {}", region_config, e))
+            })?
         };
 
         // 创建凭据
@@ -171,12 +160,12 @@ impl S3Oss {
         };
 
         // 创建存储桶实例
-        let bucket =
-            Bucket::new(&config.bucket, region, credentials).expect("create s3 bucket failed");
+        let bucket = Bucket::new(&config.bucket, region, credentials)
+            .map_err(|e| Error::Storage(format!("create s3 bucket failed: {}", e)))?;
 
-        S3Oss {
+        Ok(S3Oss {
             bucket,
             bucket_name: config.bucket.to_string(),
-        }
+        })
     }
 }

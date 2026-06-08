@@ -14,6 +14,10 @@ pub struct Cli {
     /// Specific password for decryption config file
     #[arg(short, long)]
     pub password: Option<String>,
+
+    /// Read password from file for decryption config
+    #[arg(long)]
+    pub password_file: Option<String>,
 }
 
 #[derive(Subcommand)]
