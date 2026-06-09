@@ -9,6 +9,7 @@ name: Build and Release
 env:
   CARGO_TERM_COLOR: always
   APP_NAME: backupdbtool
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
