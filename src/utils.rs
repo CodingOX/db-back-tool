@@ -224,12 +224,16 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_old_backups_keeps_recent_files_by_retention_days() {
         let dir = tempdir().unwrap();
+        let today = Utc::now().date_naive();
+        let yesterday = today - Duration::days(1);
+        let two_days_ago = today - Duration::days(2);
+
         for name in [
-            "demo_20260608_010101.7z",
-            "demo_20260607_010101.7z",
-            "demo_20260606_010101.7z",
+            format!("demo_{}_010101.7z", today.format("%Y%m%d")),
+            format!("demo_{}_010101.7z", yesterday.format("%Y%m%d")),
+            format!("demo_{}_010101.7z", two_days_ago.format("%Y%m%d")),
         ] {
-            let path = dir.path().join(name);
+            let path = dir.path().join(&name);
             let mut file = fs::File::create(&path).await.unwrap();
             file.write_all(b"data").await.unwrap();
             file.flush().await.unwrap();
@@ -237,8 +241,20 @@ mod tests {
 
         cleanup_old_backups(dir.path(), Some(2)).await.unwrap();
 
-        assert!(dir.path().join("demo_20260608_010101.7z").exists());
-        assert!(dir.path().join("demo_20260607_010101.7z").exists());
-        assert!(!dir.path().join("demo_20260606_010101.7z").exists());
+        assert!(
+            dir.path()
+                .join(format!("demo_{}_010101.7z", today.format("%Y%m%d")))
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join(format!("demo_{}_010101.7z", yesterday.format("%Y%m%d")))
+                .exists()
+        );
+        assert!(
+            !dir.path()
+                .join(format!("demo_{}_010101.7z", two_days_ago.format("%Y%m%d")))
+                .exists()
+        );
     }
 }
