@@ -157,9 +157,10 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
       - name: Package
+        shell: pwsh
         run: |
           cp target/${{ matrix.target }}/release/${{ env.APP_NAME }}.exe ${{ env.APP_NAME }}.exe
-          zip -r ${{ env.APP_NAME }}-${{ matrix.suffix }}.zip ${{ env.APP_NAME }}.exe config.yaml
+          Compress-Archive -Path ${{ env.APP_NAME }}.exe, config.yaml -DestinationPath ${{ env.APP_NAME }}-${{ matrix.suffix }}.zip
       - uses: actions/upload-artifact@v5
         with:
           name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
