@@ -96,9 +96,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-13
-            target: x86_64-apple-darwin
-            suffix: darwin-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
             suffix: darwin-aarch64
